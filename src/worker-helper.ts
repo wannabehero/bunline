@@ -14,6 +14,8 @@ export function setupThreadWorker(handler: (job: Job) => Promise<void> | void) {
         type: "error",
         id: job.id,
         error: error.message || String(error),
+        stack: error.stack,
+        name: error.name,
       });
     }
   };

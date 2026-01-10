@@ -43,13 +43,18 @@ export class WorkerPool {
     };
 
     worker.onmessage = (event) => {
-      const { type, error } = event.data;
+      const { type, error, stack, name } = event.data;
 
       if (wrapper.resolve && wrapper.reject) {
         if (type === "success") {
           wrapper.resolve();
         } else if (type === "error") {
-          wrapper.reject(new Error(error));
+          const err = new Error(error);
+          err.name = name || "WorkerError";
+          if (stack) {
+            err.stack = stack;
+          }
+          wrapper.reject(err);
         }
 
         // Cleanup

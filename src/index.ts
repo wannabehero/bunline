@@ -10,8 +10,8 @@ export type {
 export type { Job, JobStatus } from "./storage";
 
 const bunline = {
-  createQueue: (name: string, options?: QueueOptions) =>
-    new Queue(name, options),
+  createQueue: <T = unknown>(name: string, options?: QueueOptions) =>
+    new Queue<T>(name, options),
   setupThreadWorker: setupThreadWorker,
 };
 

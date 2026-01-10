@@ -1,6 +1,6 @@
-import { Queue } from "bunline";
+import bunline from "bunline";
 
-const queue = new Queue("image-queue", {
+const queue = bunline.createQueue("image-queue", {
     dbPath: "examples.sqlite",
     maxConcurrency: 2 // Run 2 workers in parallel
 });

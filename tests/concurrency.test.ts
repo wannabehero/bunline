@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { Queue } from "../src/queue";
+import bunline from "../src/index";
 import { unlinkSync } from "fs";
 
 const DB_PATH = "test-concurrency.sqlite";
@@ -13,7 +13,7 @@ describe("Concurrency System", () => {
 
     test("should handle high concurrency without race conditions", async () => {
         // Setup queue
-        const queue = new Queue("concurrency-stress-test", {
+        const queue = bunline.createQueue("concurrency-stress-test", {
             dbPath: DB_PATH,
             pollInterval: 10,
             maxConcurrency: 10 // Not used for this test as we manually poll

@@ -25,7 +25,7 @@ export interface AddOptions {
 }
 
 export class Queue<T = unknown> {
-  public storage: Storage; // Made public for testing
+  private storage: Storage; // Made public for testing
   private queueName: string;
   private pollInterval: number;
   private maxConcurrency: number;

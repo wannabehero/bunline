@@ -1,16 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { unlinkSync, writeFileSync } from "node:fs";
 import bunline from "../src/index";
-import { Storage } from "../src/storage";
+import type { Database } from "bun:sqlite";
 
-const DB_PATH = "test-queue.sqlite";
+const DB_PATH = ":memory:";
 
 describe("Queue System", () => {
-  afterEach(() => {
-    try {
-      unlinkSync(DB_PATH);
-    } catch (_e) {}
-  });
+  // No file cleanup needed for in-memory DB
 
   test("should process jobs in FIFO order", async () => {
     const queue = bunline.createQueue("fifo-test", {
@@ -106,25 +101,22 @@ describe("Queue System", () => {
       pollInterval: 50,
     });
 
+    const job = queue.add({ val: 1 }, { maxRetries: 1, backoffDelay: 50 });
+
     queue.process(async (_job) => {
       throw new Error("Always fail");
     });
 
-    const job = queue.add({ val: 1 }, { maxRetries: 1, backoffDelay: 50 });
-
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await queue.stop();
 
-    const storage = bunline.createQueue("fail-test-check", {
-      dbPath: DB_PATH,
-    }).storage;
+    // Check DB BEFORE stopping the queue (which closes the in-memory DB)
+    const db = ((queue as any).storage as any).db as Database;
     // @ts-expect-error
-    const savedJob = storage.db
-      .query("SELECT * FROM jobs WHERE id = ?")
-      .get(job.id) as any;
+    const savedJob = db.query("SELECT * FROM jobs WHERE id = ?").get(job.id) as any;
     expect(savedJob.status).toBe("failed");
     expect(savedJob.attempts).toBe(2); // 1 initial + 1 retry
-    storage.close();
+
+    await queue.stop();
   });
 
   test("should support Bun.Worker processors", async () => {
@@ -140,6 +132,7 @@ describe("Queue System", () => {
                 await new Promise(r => setTimeout(r, 50));
             });
         `;
+    const { writeFileSync, unlinkSync } = await import("node:fs");
     writeFileSync("test-worker.ts", workerCode);
 
     const queue = bunline.createQueue("worker-test", {
@@ -147,44 +140,40 @@ describe("Queue System", () => {
       pollInterval: 50,
     });
 
-    queue.process("test-worker.ts");
-
     queue.add({ fail: false });
     queue.add({ fail: true }, { maxRetries: 0 });
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    await queue.stop();
-    unlinkSync("test-worker.ts");
+    queue.process("test-worker.ts");
 
-    const storage = bunline.createQueue("worker-test-check", {
-      dbPath: DB_PATH,
-    }).storage;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Check DB BEFORE stopping
+    const db = ((queue as any).storage as any).db as Database;
     // @ts-expect-error
-    const jobs = storage.db
-      .query("SELECT * FROM jobs ORDER BY id")
-      .all() as any[];
+    const jobs = db.query("SELECT * FROM jobs ORDER BY id").all() as any[];
     expect(jobs[0].status).toBe("completed");
     expect(jobs[1].status).toBe("failed");
-    storage.close();
+
+    await queue.stop();
+    unlinkSync("test-worker.ts");
   });
 
   test("should recover from crash (timeout)", async () => {
-    const storage = new Storage(DB_PATH);
+    const queue = bunline.createQueue("crash-test", {
+        dbPath: DB_PATH,
+        pollInterval: 50,
+        lockDuration: 100,
+      });
+
+    const db = ((queue as any).storage as any).db as Database;
     // Stuck 2 seconds ago. Max retries 1 so it can be retried once more.
-    storage.db.run(
+    db.run(
       `
             INSERT INTO jobs (queue_name, data, status, attempts, max_retries, locked_until, created_at, scheduled_for)
             VALUES (?, ?, 'processing', 1, 1, ?, ?, ?)
         `,
       ["crash-test", "{}", Date.now() - 2000, Date.now(), Date.now()],
     );
-    storage.close();
-
-    const queue = bunline.createQueue("crash-test", {
-      dbPath: DB_PATH,
-      pollInterval: 50,
-      lockDuration: 100,
-    });
 
     let processed = false;
     queue.process(async (_job) => {
@@ -199,38 +188,36 @@ describe("Queue System", () => {
   });
 
   test("should fail job after max retries on crash", async () => {
-    const storage = new Storage(DB_PATH);
+    const queue = bunline.createQueue("crash-fail-test", {
+        dbPath: DB_PATH,
+        pollInterval: 50,
+        lockDuration: 100,
+      });
+
+    const db = ((queue as any).storage as any).db as Database;
+
     // Stuck job that has already exceeded retries
     // attempts: 2, max_retries: 1
-    storage.db.run(
+    db.run(
       `
             INSERT INTO jobs (queue_name, data, status, attempts, max_retries, locked_until, created_at)
             VALUES (?, ?, 'processing', 2, 1, ?, ?)
         `,
       ["crash-fail-test", "{}", Date.now() - 2000, Date.now()],
     );
-    storage.close();
-
-    const queue = bunline.createQueue("crash-fail-test", {
-      dbPath: DB_PATH,
-      pollInterval: 50,
-      lockDuration: 100,
-    });
 
     // Start the queue loop
     queue.process(async () => {});
 
     // The queue loop should mark it as failed immediately
     await new Promise((resolve) => setTimeout(resolve, 500));
-    await queue.stop();
 
-    const checkStorage = new Storage(DB_PATH);
+    // Check DB BEFORE stopping
     // @ts-expect-error
-    const job = checkStorage.db
-      .query("SELECT * FROM jobs WHERE queue_name = ?")
-      .get("crash-fail-test") as any;
+    const job = db.query("SELECT * FROM jobs WHERE queue_name = ?").get("crash-fail-test") as any;
     expect(job.status).toBe("failed");
     expect(job.last_error).toBe("Job crashed or timed out");
-    checkStorage.close();
+
+    await queue.stop();
   });
 });

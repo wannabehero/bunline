@@ -21,9 +21,9 @@ describe("Queue System", () => {
             processed.push(job.data.value);
         });
 
-        await queue.add({ value: 1 });
-        await queue.add({ value: 2 });
-        await queue.add({ value: 3 });
+        queue.add({ value: 1 });
+        queue.add({ value: 2 });
+        queue.add({ value: 3 });
 
         // Wait for processing
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -51,7 +51,7 @@ describe("Queue System", () => {
         });
 
         for (let i = 0; i < 5; i++) {
-            await queue.add({ i });
+            queue.add({ i });
         }
 
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -71,7 +71,7 @@ describe("Queue System", () => {
             }
         });
 
-        await queue.add({ val: 1 }, {
+        queue.add({ val: 1 }, {
             maxRetries: 2,
             backoffDelay: 200,
             backoffType: 'fixed'
@@ -99,7 +99,7 @@ describe("Queue System", () => {
             throw new Error("Always fail");
         });
 
-        const job = await queue.add({ val: 1 }, { maxRetries: 1, backoffDelay: 50 });
+        const job = queue.add({ val: 1 }, { maxRetries: 1, backoffDelay: 50 });
 
         await new Promise(resolve => setTimeout(resolve, 1000));
         await queue.stop();
@@ -131,8 +131,8 @@ describe("Queue System", () => {
 
         queue.process("test-worker.ts");
 
-        await queue.add({ fail: false });
-        await queue.add({ fail: true }, { maxRetries: 0 });
+        queue.add({ fail: false });
+        queue.add({ fail: true }, { maxRetries: 0 });
 
         await new Promise(resolve => setTimeout(resolve, 2000));
         await queue.stop();

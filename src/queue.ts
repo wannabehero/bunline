@@ -45,7 +45,7 @@ export class Queue<T = unknown> {
   /**
    * Add a job to the queue
    */
-  async add(data: T, options: AddOptions = {}): Promise<Job<T>> {
+  add(data: T, options: AddOptions = {}): Job<T> {
     return this.storage.addJob<T>(this.queueName, data, options);
   }
 
@@ -108,7 +108,7 @@ export class Queue<T = unknown> {
     this.storage.close();
   }
 
-  private async loop() {
+  private loop() {
     if (!this.isRunning) return;
 
     try {

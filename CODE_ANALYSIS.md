@@ -168,6 +168,9 @@ Add validation in the `Queue` constructor to throw errors for invalid options.
 The following items have been successfully implemented:
 
 *   **Type Safety:** `Job` and `Queue` are now generic (`<T>`). Storage returns strictly typed `RawJobRow` and parses JSON safely.
+*   **Async/Sync Standardization:**
+    *   Removed unnecessary `async` keywords from synchronous methods (`queue.add`, `queue.loop`, `workerPool.terminate`).
+    *   Ensured API consistency with the underlying synchronous `bun:sqlite` driver.
 *   **Database Performance:**
     *   Enabled `WAL` mode and `synchronous = FULL`.
     *   Implemented `PreparedStatements` for all queries.

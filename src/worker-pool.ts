@@ -102,7 +102,7 @@ export class WorkerPool {
         }
     }
 
-    async terminate() {
+    terminate() {
         for (const w of this.workers) {
             w.worker.terminate();
         }

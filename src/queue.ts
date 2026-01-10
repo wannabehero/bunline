@@ -1,7 +1,7 @@
 import { Storage, Job } from "./storage";
 import { WorkerPool } from "./worker-pool";
 
-export type ProcessorHandler = ((job: Job) => Promise<void>) | string;
+export type ProcessorHandler<T = unknown> = ((job: Job<T>) => Promise<void>) | string;
 
 export interface QueueOptions {
   dbPath?: string;
@@ -15,7 +15,14 @@ export interface StopOptions {
   timeout?: number; // ms to wait for active jobs
 }
 
-export class Queue {
+export interface AddOptions {
+    maxRetries?: number;
+    backoffType?: 'fixed' | 'exponential';
+    backoffDelay?: number;
+    delay?: number;
+}
+
+export class Queue<T = unknown> {
   public storage: Storage; // Made public for testing
   private queueName: string;
   private pollInterval: number;
@@ -23,7 +30,7 @@ export class Queue {
   private lockDuration: number;
   private isRunning: boolean = false;
   private activeJobs: number = 0;
-  private processor: ProcessorHandler | null = null;
+  private processor: ProcessorHandler<T> | null = null;
   private timer: Timer | null = null;
   private workerPool: WorkerPool | null = null;
 
@@ -38,19 +45,14 @@ export class Queue {
   /**
    * Add a job to the queue
    */
-  async add(data: any, options: {
-    maxRetries?: number;
-    backoffType?: 'fixed' | 'exponential';
-    backoffDelay?: number;
-    delay?: number;
-  } = {}): Promise<Job> {
-    return this.storage.addJob(this.queueName, data, options);
+  async add(data: T, options: AddOptions = {}): Promise<Job<T>> {
+    return this.storage.addJob<T>(this.queueName, data, options);
   }
 
   /**
    * Register a processor and start processing
    */
-  process(handler: ProcessorHandler) {
+  process(handler: ProcessorHandler<T>) {
     if (this.processor) {
       throw new Error("Processor already registered for this queue");
     }
@@ -121,7 +123,7 @@ export class Queue {
     }
 
     try {
-      const job = this.storage.getNextJob(this.queueName, this.lockDuration);
+      const job = this.storage.getNextJob<T>(this.queueName, this.lockDuration);
 
       if (job) {
         this.activeJobs++;
@@ -151,7 +153,7 @@ export class Queue {
     this.timer = setTimeout(() => this.loop(), ms);
   }
 
-  private async handleJob(job: Job) {
+  private async handleJob(job: Job<T>) {
     try {
       if (!this.processor) {
         throw new Error("No processor registered");
@@ -160,13 +162,19 @@ export class Queue {
       if (typeof this.processor === 'function') {
         await this.processor(job);
       } else if (this.workerPool) {
-        await this.workerPool.run(job);
+        await this.workerPool.run(job as Job<unknown>); // Worker pool deals with unknown/any, serialization handles types
       }
 
       this.storage.completeJob(job.id);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(`Job ${job.id} failed:`, err);
-      this.storage.failJob(job.id, err.message || String(err));
+      let errorMessage = "Unknown error";
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      }
+      this.storage.failJob(job.id, errorMessage);
     }
   }
 }

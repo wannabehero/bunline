@@ -8,12 +8,12 @@ interface WorkerWrapper {
     worker: Worker;
     busy: boolean;
     resolve?: (value: void | PromiseLike<void>) => void;
-    reject?: (reason?: any) => void;
+    reject?: (reason?: unknown) => void;
 }
 
 export class WorkerPool {
     private workers: WorkerWrapper[] = [];
-    private queue: { job: Job; resolve: any; reject: any }[] = [];
+    private queue: { job: Job<unknown>; resolve: (value: void | PromiseLike<void>) => void; reject: (reason?: unknown) => void }[] = [];
     private workerPath: string;
     private size: number;
 
@@ -71,7 +71,7 @@ export class WorkerPool {
         this.workers.push(wrapper);
     }
 
-    async run(job: Job): Promise<void> {
+    async run(job: Job<unknown>): Promise<void> {
         return new Promise((resolve, reject) => {
             const availableWorker = this.workers.find(w => !w.busy);
 
@@ -83,7 +83,7 @@ export class WorkerPool {
         });
     }
 
-    private execute(wrapper: WorkerWrapper, job: Job, resolve: any, reject: any) {
+    private execute(wrapper: WorkerWrapper, job: Job<unknown>, resolve: (value: void | PromiseLike<void>) => void, reject: (reason?: unknown) => void) {
         wrapper.busy = true;
         wrapper.resolve = resolve;
         wrapper.reject = reject;

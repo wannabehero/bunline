@@ -1,4 +1,4 @@
-import { Storage, Job } from "./storage";
+import { type Job, Storage } from "./storage";
 import { WorkerPool } from "./worker-pool";
 
 export type ProcessorHandler = ((job: Job) => Promise<void>) | string;
@@ -38,12 +38,15 @@ export class Queue {
   /**
    * Add a job to the queue
    */
-  async add(data: any, options: {
-    maxRetries?: number;
-    backoffType?: 'fixed' | 'exponential';
-    backoffDelay?: number;
-    delay?: number;
-  } = {}): Promise<Job> {
+  async add(
+    data: any,
+    options: {
+      maxRetries?: number;
+      backoffType?: "fixed" | "exponential";
+      backoffDelay?: number;
+      delay?: number;
+    } = {},
+  ): Promise<Job> {
     return this.storage.addJob(this.queueName, data, options);
   }
 
@@ -56,11 +59,11 @@ export class Queue {
     }
     this.processor = handler;
 
-    if (typeof handler === 'string') {
-        // Initialize worker pool
-        this.workerPool = new WorkerPool(handler, {
-            size: this.maxConcurrency
-        });
+    if (typeof handler === "string") {
+      // Initialize worker pool
+      this.workerPool = new WorkerPool(handler, {
+        size: this.maxConcurrency,
+      });
     }
 
     this.start();
@@ -92,11 +95,13 @@ export class Queue {
     if (graceful && this.activeJobs > 0) {
       const startTime = Date.now();
       while (this.activeJobs > 0 && Date.now() - startTime < timeout) {
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 50));
       }
 
       if (this.activeJobs > 0) {
-        console.warn(`Force stopping with ${this.activeJobs} jobs still active after ${timeout}ms timeout`);
+        console.warn(
+          `Force stopping with ${this.activeJobs} jobs still active after ${timeout}ms timeout`,
+        );
       }
     }
 
@@ -110,9 +115,9 @@ export class Queue {
     if (!this.isRunning) return;
 
     try {
-        this.storage.recoverStuckJobs(this.queueName);
+      this.storage.recoverStuckJobs(this.queueName);
     } catch (e) {
-        console.error("Error recovering stuck jobs:", e);
+      console.error("Error recovering stuck jobs:", e);
     }
 
     if (this.activeJobs >= this.maxConcurrency) {
@@ -126,15 +131,15 @@ export class Queue {
       if (job) {
         this.activeJobs++;
         this.handleJob(job).finally(() => {
-            this.activeJobs--;
-            if (this.isRunning) {
-                // Trigger immediate loop to process next job faster
-                setImmediate(() => this.loop());
-            }
+          this.activeJobs--;
+          if (this.isRunning) {
+            // Trigger immediate loop to process next job faster
+            setImmediate(() => this.loop());
+          }
         });
 
         if (this.activeJobs < this.maxConcurrency) {
-            setImmediate(() => this.loop());
+          setImmediate(() => this.loop());
         }
         return;
       } else {
@@ -157,7 +162,7 @@ export class Queue {
         throw new Error("No processor registered");
       }
 
-      if (typeof this.processor === 'function') {
+      if (typeof this.processor === "function") {
         await this.processor(job);
       } else if (this.workerPool) {
         await this.workerPool.run(job);

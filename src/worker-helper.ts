@@ -1,20 +1,20 @@
-import { Job } from "./storage";
+import type { Job } from "./storage";
 
 declare var self: Worker;
 
 export function setupWorker(handler: (job: Job) => Promise<void> | void) {
-    // Bun Workers use self.onmessage
-    self.onmessage = async (event: MessageEvent) => {
-        const job = event.data as Job;
-        try {
-            await handler(job);
-            self.postMessage({ type: 'success', id: job.id });
-        } catch (error: any) {
-            self.postMessage({
-                type: 'error',
-                id: job.id,
-                error: error.message || String(error)
-            });
-        }
-    };
+  // Bun Workers use self.onmessage
+  self.onmessage = async (event: MessageEvent) => {
+    const job = event.data as Job;
+    try {
+      await handler(job);
+      self.postMessage({ type: "success", id: job.id });
+    } catch (error: any) {
+      self.postMessage({
+        type: "error",
+        id: job.id,
+        error: error.message || String(error),
+      });
+    }
+  };
 }

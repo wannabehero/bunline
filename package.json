@@ -4,7 +4,12 @@
   "description": "A lightweight, durable, and fast worker queue for Bun, backed by bun:sqlite.",
   "module": "src/index.ts",
   "type": "module",
+  "scripts": {
+    "format": "biome format --write .",
+    "check": "biome check --write ."
+  },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.11",
     "@types/bun": "latest"
   },
   "peerDependencies": {

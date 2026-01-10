@@ -9,14 +9,22 @@ export function setupThreadWorker(handler: (job: Job) => Promise<void> | void) {
     try {
       await handler(job);
       self.postMessage({ type: "success", id: job.id });
-    } catch (error: any) {
-      self.postMessage({
-        type: "error",
-        id: job.id,
-        error: error.message || String(error),
-        stack: error.stack,
-        name: error.name,
-      });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        self.postMessage({
+          type: "error",
+          id: job.id,
+          error: error.message,
+          stack: error.stack,
+          name: error.name,
+        });
+      } else {
+        self.postMessage({
+          type: "error",
+          id: job.id,
+          error: String(error),
+        });
+      }
     }
   };
 }

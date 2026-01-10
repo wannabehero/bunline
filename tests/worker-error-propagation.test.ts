@@ -1,13 +1,10 @@
 import { describe, it, expect, mock, spyOn } from "bun:test";
 import bunline from "../src/index";
-import { unlinkSync, existsSync } from "node:fs";
 
-const DB_FILE = "repro-worker-error.sqlite";
+const DB_FILE = ":memory:";
 const WORKER_FILE = new URL("./worker-error.ts", import.meta.url).pathname;
 
 describe("Worker Error Propagation", () => {
-  if (existsSync(DB_FILE)) unlinkSync(DB_FILE);
-
   it("should propagate error stack and name", async () => {
     // Spy on console.error to capture the error object
     const consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
@@ -46,6 +43,5 @@ describe("Worker Error Propagation", () => {
     expect(errorObj.stack).toContain("tests/worker-error.ts");
 
     consoleErrorSpy.mockRestore();
-    if (existsSync(DB_FILE)) unlinkSync(DB_FILE);
   });
 });

@@ -2,10 +2,26 @@ import { Database, Statement } from "bun:sqlite";
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
-export interface Job {
+export interface RawJobRow {
   id: number;
   queue_name: string;
-  data: any;
+  data: string;
+  status: JobStatus;
+  attempts: number;
+  max_retries: number;
+  backoff_type: 'fixed' | 'exponential';
+  backoff_delay: number; // in ms
+  created_at: number;
+  updated_at: number;
+  scheduled_for: number;
+  locked_until: number | null;
+  last_error: string | null;
+}
+
+export interface Job<T = unknown> {
+  id: number;
+  queue_name: string;
+  data: T;
   status: JobStatus;
   attempts: number;
   max_retries: number;
@@ -129,16 +145,16 @@ export class Storage {
     };
   }
 
-  addJob(
+  addJob<T>(
     queueName: string,
-    data: any,
+    data: T,
     options: {
       maxRetries?: number;
       backoffType?: 'fixed' | 'exponential';
       backoffDelay?: number;
       delay?: number;
     } = {}
-  ): Job {
+  ): Job<T> {
     const now = Date.now();
     const scheduledFor = now + (options.delay || 0);
 
@@ -150,15 +166,15 @@ export class Storage {
       $backoffDelay: options.backoffDelay ?? 1000,
       $now: now,
       $scheduledFor: scheduledFor
-    }) as any;
+    }) as RawJobRow;
 
-    return this.parseJob(result);
+    return this.parseJob<T>(result);
   }
 
   /**
    * Atomically claims the next available job for a specific queue.
    */
-  getNextJob(queueName: string, lockDurationMs: number = 30000): Job | null {
+  getNextJob<T = unknown>(queueName: string, lockDurationMs: number = 30000): Job<T> | null {
     const now = Date.now();
     const lockedUntil = now + lockDurationMs;
 
@@ -166,10 +182,10 @@ export class Storage {
       $queueName: queueName,
       $now: now,
       $lockedUntil: lockedUntil
-    }) as any;
+    }) as RawJobRow | undefined;
 
     if (job) {
-      return this.parseJob(job);
+      return this.parseJob<T>(job);
     }
 
     return null;
@@ -183,7 +199,7 @@ export class Storage {
     const now = Date.now();
 
     // We need to check if we should retry
-    const job = this.statements.getJobById.get({ $id: id }) as any;
+    const job = this.statements.getJobById.get({ $id: id }) as RawJobRow | undefined;
     if (!job) return; // Should not happen
 
     const currentJob = this.parseJob(job);
@@ -226,17 +242,20 @@ export class Storage {
     this.db.close();
   }
 
-  private parseJob(row: any): Job {
-    let data: any;
+  private parseJob<T = unknown>(row: RawJobRow): Job<T> {
+    let data: T;
     try {
-      data = JSON.parse(row.data);
+      data = JSON.parse(row.data) as T;
     } catch (e) {
       console.error(`Failed to parse job ${row.id} data as JSON:`, e);
-      // Return raw data string so the job can still be processed/failed
-      data = row.data;
+      // Return raw string cast as T if parsing fails, or we could set it to null/undefined if T allows
+      // For now, we'll cast the string to T to avoid runtime crashes, though it might break consumers expecting an object.
+      // But this is an exceptional case.
+      data = row.data as unknown as T;
     }
+    const { data: _rawData, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       data
     };
   }

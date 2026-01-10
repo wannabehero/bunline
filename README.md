@@ -25,7 +25,11 @@ bun add github:wannabehero/bunline#v0.0.1
 ```typescript
 import bunline from "bunline";
 
-const queue = bunline.createQueue("email-queue", {
+interface EmailJob {
+  email: string;
+}
+
+const queue = bunline.createQueue<EmailJob>("email-queue", {
   dbPath: "queue.sqlite", // Optional, defaults to queue.sqlite
   maxConcurrency: 5
 });
@@ -39,9 +43,9 @@ queue.process(async (job) => {
 
 // Add jobs
 await queue.add({ email: "user@example.com" }, {
-    maxRetries: 3,
-    backoffType: 'exponential',
-    backoffDelay: 1000
+  maxRetries: 3,
+  backoffType: "exponential",
+  backoffDelay: 1000
 });
 ```
 
@@ -53,7 +57,11 @@ For CPU-intensive tasks, you can run jobs in a separate thread using `Bun.Worker
 ```typescript
 import bunline from "bunline"; // Import default
 
-bunline.setupThreadWorker(async (job) => {
+interface HeavyJob {
+  image: string;
+}
+
+bunline.setupThreadWorker<HeavyJob>(async (job) => {
   console.log("Heavy processing:", job.data);
   // Do heavy work...
 });
@@ -63,7 +71,11 @@ bunline.setupThreadWorker(async (job) => {
 ```typescript
 import bunline from "bunline";
 
-const queue = bunline.createQueue("heavy-queue");
+interface HeavyJob {
+  image: string;
+}
+
+const queue = bunline.createQueue<HeavyJob>("heavy-queue");
 
 // Point to the worker file
 queue.process("./worker.ts");
@@ -73,9 +85,9 @@ await queue.add({ image: "profile.jpg" });
 
 ## API
 
-### `bunline.createQueue(name, options)`
+### `bunline.createQueue<T>(name, options)`
 
-Returns a `Queue` instance.
+Returns a `Queue<T>` instance.
 
 - `name`: String, name of the queue.
 - `options`:
@@ -86,19 +98,19 @@ Returns a `Queue` instance.
 
 ### `queue.add(data, options)`
 
-- `data`: Serializable JSON object.
+- `data`: `T`. Serializable JSON object.
 - `options`:
   - `delay`: Ms to delay execution.
   - `maxRetries`: Number of retries on failure.
-  - `backoffType`: 'fixed' | 'exponential'.
+  - `backoffType`: "fixed" | "exponential".
   - `backoffDelay`: Ms delay between retries.
 
 ### `queue.process(handler)`
 
-- `handler`: Either an `async function(job)` OR a `string` (path to worker file).
+- `handler`: Either an `async function(job: Job<T>)` OR a `string` (path to worker file).
 
-### `bunline.setupThreadWorker(handler)`
+### `bunline.setupThreadWorker<T>(handler)`
 
 Used inside a worker file to define the job processor.
 
-- `handler`: `async function(job)` that processes the job.
+- `handler`: `async function(job: Job<T>)` that processes the job.

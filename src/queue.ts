@@ -10,6 +10,11 @@ export interface QueueOptions {
   lockDuration?: number; // ms
 }
 
+export interface StopOptions {
+  graceful?: boolean;
+  timeout?: number; // ms to wait for active jobs
+}
+
 export class Queue {
   public storage: Storage; // Made public for testing
   private queueName: string;
@@ -72,15 +77,31 @@ export class Queue {
 
   /**
    * Stop the queue
+   * @param options.graceful - If true, wait for active jobs to complete (default: true)
+   * @param options.timeout - Max ms to wait for active jobs (default: 30000)
    */
-  async stop() {
+  async stop(options: StopOptions = {}) {
+    const { graceful = true, timeout = 30000 } = options;
+
     this.isRunning = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+
+    if (graceful && this.activeJobs > 0) {
+      const startTime = Date.now();
+      while (this.activeJobs > 0 && Date.now() - startTime < timeout) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+
+      if (this.activeJobs > 0) {
+        console.warn(`Force stopping with ${this.activeJobs} jobs still active after ${timeout}ms timeout`);
+      }
+    }
+
     if (this.workerPool) {
-        await this.workerPool.terminate();
+      await this.workerPool.terminate();
     }
     this.storage.close();
   }

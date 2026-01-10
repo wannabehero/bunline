@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, Statement } from "bun:sqlite";
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
@@ -18,12 +18,25 @@ export interface Job {
   last_error: string | null;
 }
 
+interface PreparedStatements {
+  addJob: Statement;
+  getNextJob: Statement;
+  completeJob: Statement;
+  getJobById: Statement;
+  retryJob: Statement;
+  failJobPermanently: Statement;
+  recoverRetryableJobs: Statement;
+  recoverFailedJobs: Statement;
+}
+
 export class Storage {
   public db: Database; // Made public for testing access if needed
+  private statements!: PreparedStatements;
 
   constructor(dbPath: string = ":memory:") {
     this.db = new Database(dbPath);
     this.init();
+    this.prepareStatements();
   }
 
   private init() {
@@ -58,6 +71,64 @@ export class Storage {
     `);
   }
 
+  private prepareStatements() {
+    this.statements = {
+      addJob: this.db.prepare(`
+        INSERT INTO jobs (
+          queue_name, data, status, max_retries, backoff_type, backoff_delay,
+          created_at, updated_at, scheduled_for
+        ) VALUES ($queueName, $data, 'pending', $maxRetries, $backoffType, $backoffDelay, $now, $now, $scheduledFor)
+        RETURNING *
+      `),
+      getNextJob: this.db.prepare(`
+        UPDATE jobs
+        SET status = 'processing', locked_until = $lockedUntil, attempts = attempts + 1, updated_at = $now
+        WHERE id = (
+          SELECT id FROM jobs
+          WHERE queue_name = $queueName
+            AND status = 'pending'
+            AND scheduled_for <= $now
+          ORDER BY scheduled_for ASC
+          LIMIT 1
+        )
+        AND status = 'pending'
+        RETURNING *
+      `),
+      completeJob: this.db.prepare(`
+        UPDATE jobs SET status = 'completed', locked_until = NULL, updated_at = $now WHERE id = $id
+      `),
+      getJobById: this.db.prepare(`
+        SELECT * FROM jobs WHERE id = $id
+      `),
+      retryJob: this.db.prepare(`
+        UPDATE jobs
+        SET status = 'pending', locked_until = NULL, updated_at = $now, scheduled_for = $scheduledFor, last_error = $error
+        WHERE id = $id
+      `),
+      failJobPermanently: this.db.prepare(`
+        UPDATE jobs
+        SET status = 'failed', locked_until = NULL, updated_at = $now, last_error = $error
+        WHERE id = $id
+      `),
+      recoverRetryableJobs: this.db.prepare(`
+        UPDATE jobs
+        SET status = 'pending', locked_until = NULL, updated_at = $now
+        WHERE queue_name = $queueName
+          AND status = 'processing'
+          AND locked_until < $now
+          AND attempts <= max_retries
+      `),
+      recoverFailedJobs: this.db.prepare(`
+        UPDATE jobs
+        SET status = 'failed', locked_until = NULL, updated_at = $now, last_error = 'Job crashed or timed out'
+        WHERE queue_name = $queueName
+          AND status = 'processing'
+          AND locked_until < $now
+          AND attempts > max_retries
+      `)
+    };
+  }
+
   addJob(
     queueName: string,
     data: any,
@@ -71,22 +142,15 @@ export class Storage {
     const now = Date.now();
     const scheduledFor = now + (options.delay || 0);
 
-    const result = this.db.query(`
-      INSERT INTO jobs (
-        queue_name, data, status, max_retries, backoff_type, backoff_delay,
-        created_at, updated_at, scheduled_for
-      ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-      RETURNING *;
-    `).get(
-      queueName,
-      JSON.stringify(data),
-      options.maxRetries ?? 0,
-      options.backoffType ?? 'fixed',
-      options.backoffDelay ?? 1000,
-      now,
-      now,
-      scheduledFor
-    ) as any;
+    const result = this.statements.addJob.get({
+      $queueName: queueName,
+      $data: JSON.stringify(data),
+      $maxRetries: options.maxRetries ?? 0,
+      $backoffType: options.backoffType ?? 'fixed',
+      $backoffDelay: options.backoffDelay ?? 1000,
+      $now: now,
+      $scheduledFor: scheduledFor
+    }) as any;
 
     return this.parseJob(result);
   }
@@ -98,20 +162,7 @@ export class Storage {
     const now = Date.now();
     const lockedUntil = now + lockDurationMs;
 
-    const job = this.db.query(`
-      UPDATE jobs
-      SET status = 'processing', locked_until = $lockedUntil, attempts = attempts + 1, updated_at = $now
-      WHERE id = (
-        SELECT id FROM jobs
-        WHERE queue_name = $queueName
-          AND status = 'pending'
-          AND scheduled_for <= $now
-        ORDER BY scheduled_for ASC
-        LIMIT 1
-      )
-      AND status = 'pending'
-      RETURNING *;
-    `).get({
+    const job = this.statements.getNextJob.get({
       $queueName: queueName,
       $now: now,
       $lockedUntil: lockedUntil
@@ -125,75 +176,68 @@ export class Storage {
   }
 
   completeJob(id: number) {
-    this.db.run(`
-      UPDATE jobs SET status = 'completed', locked_until = NULL, updated_at = ? WHERE id = ?
-    `, [Date.now(), id]);
+    this.statements.completeJob.run({ $now: Date.now(), $id: id });
   }
 
   failJob(id: number, error: string) {
     const now = Date.now();
 
     // We need to check if we should retry
-    const job = this.db.query(`SELECT * FROM jobs WHERE id = ?`).get(id) as any;
+    const job = this.statements.getJobById.get({ $id: id }) as any;
     if (!job) return; // Should not happen
 
     const currentJob = this.parseJob(job);
 
     if (currentJob.attempts <= currentJob.max_retries) {
-        // Retry
-        let delay = currentJob.backoff_delay;
-        if (currentJob.backoff_type === 'exponential') {
-            delay = delay * Math.pow(2, currentJob.attempts - 1);
-        }
-        const nextSchedule = now + delay;
+      // Retry
+      let delay = currentJob.backoff_delay;
+      if (currentJob.backoff_type === 'exponential') {
+        delay = delay * Math.pow(2, currentJob.attempts - 1);
+      }
+      const nextSchedule = now + delay;
 
-        this.db.run(`
-            UPDATE jobs
-            SET status = 'pending', locked_until = NULL, updated_at = ?, scheduled_for = ?, last_error = ?
-            WHERE id = ?
-        `, [now, nextSchedule, error, id]);
+      this.statements.retryJob.run({
+        $now: now,
+        $scheduledFor: nextSchedule,
+        $error: error,
+        $id: id
+      });
     } else {
-        // Fail permanently
-        this.db.run(`
-            UPDATE jobs
-            SET status = 'failed', locked_until = NULL, updated_at = ?, last_error = ?
-            WHERE id = ?
-        `, [now, error, id]);
+      // Fail permanently
+      this.statements.failJobPermanently.run({
+        $now: now,
+        $error: error,
+        $id: id
+      });
     }
   }
 
   recoverStuckJobs(queueName: string) {
-      const now = Date.now();
+    const now = Date.now();
 
-      // 1. Recover jobs that can still be retried
-      this.db.run(`
-        UPDATE jobs
-        SET status = 'pending', locked_until = NULL, updated_at = ?
-        WHERE queue_name = ?
-          AND status = 'processing'
-          AND locked_until < ?
-          AND attempts <= max_retries
-      `, [now, queueName, now]);
+    // 1. Recover jobs that can still be retried
+    this.statements.recoverRetryableJobs.run({ $now: now, $queueName: queueName });
 
-      // 2. Fail jobs that have exceeded max retries
-      this.db.run(`
-        UPDATE jobs
-        SET status = 'failed', locked_until = NULL, updated_at = ?, last_error = 'Job crashed or timed out'
-        WHERE queue_name = ?
-          AND status = 'processing'
-          AND locked_until < ?
-          AND attempts > max_retries
-      `, [now, queueName, now]);
+    // 2. Fail jobs that have exceeded max retries
+    this.statements.recoverFailedJobs.run({ $now: now, $queueName: queueName });
   }
 
   close() {
-      this.db.close();
+    this.db.close();
   }
 
   private parseJob(row: any): Job {
+    let data: any;
+    try {
+      data = JSON.parse(row.data);
+    } catch (e) {
+      console.error(`Failed to parse job ${row.id} data as JSON:`, e);
+      // Return raw data string so the job can still be processed/failed
+      data = row.data;
+    }
     return {
       ...row,
-      data: JSON.parse(row.data)
+      data
     };
   }
 }

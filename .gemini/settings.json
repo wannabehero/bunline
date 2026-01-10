@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "matcher": "write_file|replace.*",
+        "hooks": [
+          {
+            "name": "auto-fix",
+            "type": "command",
+            "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/run-fix.sh",
+            "description": "Runs bun run fix after every file edit"
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "submit",
+        "hooks": [
+          {
+            "name": "pre-commit-test",
+            "type": "command",
+            "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/run-test.sh",
+            "description": "Runs bun test before submit",
+            "timeout": 120000
+          }
+        ]
+      }
+    ]
+  }
+}

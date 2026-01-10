@@ -1,6 +1,6 @@
-import { Queue } from "bunline";
+import bunline from "bunline";
 
-const queue = new Queue("email-queue", {
+const queue = bunline.createQueue("email-queue", {
     dbPath: "examples.sqlite"
 });
 

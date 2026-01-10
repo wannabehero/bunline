@@ -21,9 +21,9 @@ bun add bunline
 ### 1. Basic In-Process Processing
 
 ```typescript
-import { Queue } from "bunline";
+import bunline from "bunline";
 
-const queue = new Queue("email-queue", {
+const queue = bunline.createQueue("email-queue", {
   dbPath: "queue.sqlite", // Optional, defaults to queue.sqlite
   maxConcurrency: 5
 });
@@ -49,9 +49,9 @@ For CPU-intensive tasks, you can run jobs in a separate thread using `Bun.Worker
 
 **worker.ts**
 ```typescript
-import { setupWorker } from "bunline"; // Import helper
+import bunline from "bunline"; // Import default
 
-setupWorker(async (job) => {
+bunline.createWorker(async (job) => {
   console.log("Heavy processing:", job.data);
   // Do heavy work...
 });
@@ -59,9 +59,9 @@ setupWorker(async (job) => {
 
 **main.ts**
 ```typescript
-import { Queue } from "bunline";
+import bunline from "bunline";
 
-const queue = new Queue("heavy-queue");
+const queue = bunline.createQueue("heavy-queue");
 
 // Point to the worker file
 queue.process("./worker.ts");
@@ -71,7 +71,9 @@ await queue.add({ image: "profile.jpg" });
 
 ## API
 
-### `new Queue(name, options)`
+### `bunline.createQueue(name, options)`
+
+Returns a `Queue` instance.
 
 - `name`: String, name of the queue.
 - `options`:
@@ -92,3 +94,9 @@ await queue.add({ image: "profile.jpg" });
 ### `queue.process(handler)`
 
 - `handler`: Either an `async function(job)` OR a `string` (path to worker file).
+
+### `bunline.createWorker(handler)`
+
+Used inside a worker file to define the job processor.
+
+- `handler`: `async function(job)` that processes the job.

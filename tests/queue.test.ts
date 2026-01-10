@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { Queue } from "../src/queue";
+import bunline from "../src/index";
 import { Storage } from "../src/storage";
 import { writeFileSync, unlinkSync } from "fs";
 
@@ -14,7 +14,7 @@ describe("Queue System", () => {
     });
 
     test("should process jobs in FIFO order", async () => {
-        const queue = new Queue("fifo-test", { dbPath: DB_PATH, pollInterval: 50 });
+        const queue = bunline.createQueue("fifo-test", { dbPath: DB_PATH, pollInterval: 50 });
         const processed: number[] = [];
 
         queue.process(async (job) => {
@@ -34,7 +34,7 @@ describe("Queue System", () => {
     });
 
     test("should handle concurrency limits", async () => {
-        const queue = new Queue("concurrency-test", {
+        const queue = bunline.createQueue("concurrency-test", {
             dbPath: DB_PATH,
             pollInterval: 50,
             maxConcurrency: 2
@@ -61,7 +61,7 @@ describe("Queue System", () => {
     });
 
     test("should retry failed jobs with backoff", async () => {
-        const queue = new Queue("retry-test", { dbPath: DB_PATH, pollInterval: 50 });
+        const queue = bunline.createQueue("retry-test", { dbPath: DB_PATH, pollInterval: 50 });
         const attempts: number[] = [];
 
         queue.process(async (job) => {
@@ -93,7 +93,7 @@ describe("Queue System", () => {
     });
 
     test("should move to failed status after max retries", async () => {
-        const queue = new Queue("fail-test", { dbPath: DB_PATH, pollInterval: 50 });
+        const queue = bunline.createQueue("fail-test", { dbPath: DB_PATH, pollInterval: 50 });
 
         queue.process(async (job) => {
             throw new Error("Always fail");
@@ -104,7 +104,7 @@ describe("Queue System", () => {
         await new Promise(resolve => setTimeout(resolve, 1000));
         await queue.stop();
 
-        const storage = new Queue("fail-test-check", { dbPath: DB_PATH }).storage;
+        const storage = bunline.createQueue("fail-test-check", { dbPath: DB_PATH }).storage;
         // @ts-ignore
         const savedJob = storage.db.query("SELECT * FROM jobs WHERE id = ?").get(job.id) as any;
         expect(savedJob.status).toBe('failed');
@@ -113,10 +113,13 @@ describe("Queue System", () => {
     });
 
     test("should support Bun.Worker processors", async () => {
+        // Updated worker code to simulate package usage as much as possible,
+        // but since we are inside the repo, we point to src/index.ts.
+        // The user wants 'bunline.createWorker'
         const workerCode = `
-            import { setupWorker } from "${process.cwd()}/src/worker-helper.ts";
+            import bunline from "${process.cwd()}/src/index.ts";
 
-            setupWorker(async (job) => {
+            bunline.createWorker(async (job) => {
                 // console.log("Worker processing:", job.data);
                 if (job.data.fail) throw new Error("Worker failed");
                 await new Promise(r => setTimeout(r, 50));
@@ -124,7 +127,7 @@ describe("Queue System", () => {
         `;
         writeFileSync("test-worker.ts", workerCode);
 
-        const queue = new Queue("worker-test", { dbPath: DB_PATH, pollInterval: 50 });
+        const queue = bunline.createQueue("worker-test", { dbPath: DB_PATH, pollInterval: 50 });
 
         queue.process("test-worker.ts");
 
@@ -135,7 +138,7 @@ describe("Queue System", () => {
         await queue.stop();
         unlinkSync("test-worker.ts");
 
-        const storage = new Queue("worker-test-check", { dbPath: DB_PATH }).storage;
+        const storage = bunline.createQueue("worker-test-check", { dbPath: DB_PATH }).storage;
         // @ts-ignore
         const jobs = storage.db.query("SELECT * FROM jobs ORDER BY id").all() as any[];
         expect(jobs[0].status).toBe('completed');
@@ -152,7 +155,7 @@ describe("Queue System", () => {
         `, ["crash-test", "{}", Date.now() - 2000, Date.now(), Date.now()]);
         storage.close();
 
-        const queue = new Queue("crash-test", {
+        const queue = bunline.createQueue("crash-test", {
             dbPath: DB_PATH,
             pollInterval: 50,
             lockDuration: 100
@@ -180,7 +183,7 @@ describe("Queue System", () => {
         `, ["crash-fail-test", "{}", Date.now() - 2000, Date.now()]);
         storage.close();
 
-        const queue = new Queue("crash-fail-test", {
+        const queue = bunline.createQueue("crash-fail-test", {
             dbPath: DB_PATH,
             pollInterval: 50,
             lockDuration: 100

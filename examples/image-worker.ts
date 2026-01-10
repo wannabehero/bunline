@@ -1,6 +1,6 @@
 import bunline from "bunline";
 
-bunline.createWorker(async (job) => {
+bunline.setupThreadWorker(async (job) => {
     console.log(`[Worker ${process.pid}] Resizing image: ${job.data.file}`);
 
     // Simulate CPU work

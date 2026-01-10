@@ -46,7 +46,7 @@ interface PreparedStatements {
 }
 
 export class Storage {
-  public db: Database; // Made public for testing access if needed
+  private db: Database; // Made public for testing access if needed
   private statements!: PreparedStatements;
 
   constructor(dbPath: string = ":memory:") {

@@ -1,15 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "node:fs";
 import bunline from "../src/index";
+import type { Database } from "bun:sqlite";
 
-const DB_PATH = "test-concurrency.sqlite";
+const DB_PATH = ":memory:";
 
 describe("Concurrency System", () => {
-  afterEach(() => {
-    try {
-      unlinkSync(DB_PATH);
-    } catch (_e) {}
-  });
+  // No file cleanup needed for in-memory DB
 
   test("should handle high concurrency without race conditions", async () => {
     // Setup queue
@@ -31,6 +27,9 @@ describe("Concurrency System", () => {
     const processedCount = { count: 0 };
     const errors: any[] = [];
 
+    const storage = (queue as any).storage;
+    const db = storage.db as Database;
+
     // Simulate concurrent workers
     const workers = Array.from(
       { length: WORKER_COUNT },
@@ -39,15 +38,14 @@ describe("Concurrency System", () => {
           try {
             // Manually calling storage.getNextJob to simulate the race condition
             // that would happen inside queue.loop()
-            const job = queue.storage.getNextJob(
+            const job = storage.getNextJob(
               "concurrency-stress-test",
               5000,
             );
 
             if (!job) {
               // Check if we are done
-              const remaining = queue.storage.db
-                .query(
+              const remaining = db.query(
                   "SELECT count(*) as c FROM jobs WHERE status = 'pending'",
                 )
                 .get() as any;
@@ -66,7 +64,7 @@ describe("Concurrency System", () => {
             processedCount.count++;
 
             // Complete job
-            queue.storage.completeJob(job.id);
+            storage.completeJob(job.id);
           } catch (e) {
             errors.push(e);
             break;
@@ -86,7 +84,7 @@ describe("Concurrency System", () => {
     expect(processedCount.count).toBe(JOB_COUNT);
 
     // Verify DB state
-    const remaining = queue.storage.db
+    const remaining = db
       .query("SELECT count(*) as c FROM jobs WHERE status != 'completed'")
       .get() as any;
     expect(remaining.c).toBe(0);

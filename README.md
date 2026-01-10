@@ -1,4 +1,4 @@
-# Bun SQLite Queue
+# Bunline
 
 A lightweight, durable, and fast worker queue for Bun, backed by `bun:sqlite`.
 
@@ -13,17 +13,15 @@ A lightweight, durable, and fast worker queue for Bun, backed by `bun:sqlite`.
 ## Installation
 
 ```bash
-bun add bun-sqlite-queue
+bun add bunline
 ```
-
-*(Note: Since this is a local library for now, you import it from the source)*
 
 ## Usage
 
 ### 1. Basic In-Process Processing
 
 ```typescript
-import { Queue } from "./src"; // or "bun-sqlite-queue" if installed
+import { Queue } from "bunline";
 
 const queue = new Queue("email-queue", {
   dbPath: "queue.sqlite", // Optional, defaults to queue.sqlite
@@ -51,7 +49,7 @@ For CPU-intensive tasks, you can run jobs in a separate thread using `Bun.Worker
 
 **worker.ts**
 ```typescript
-import { setupWorker } from "./src"; // Import helper
+import { setupWorker } from "bunline"; // Import helper
 
 setupWorker(async (job) => {
   console.log("Heavy processing:", job.data);
@@ -61,7 +59,7 @@ setupWorker(async (job) => {
 
 **main.ts**
 ```typescript
-import { Queue } from "./src";
+import { Queue } from "bunline";
 
 const queue = new Queue("heavy-queue");
 

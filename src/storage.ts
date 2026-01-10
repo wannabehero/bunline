@@ -27,6 +27,10 @@ export class Storage {
   }
 
   private init() {
+    this.db.run('PRAGMA journal_mode = WAL;');
+    this.db.run('PRAGMA synchronous = FULL;');
+    this.db.run('PRAGMA busy_timeout = 5000;');
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,35 +96,32 @@ export class Storage {
    */
   getNextJob(queueName: string, lockDurationMs: number = 30000): Job | null {
     const now = Date.now();
+    const lockedUntil = now + lockDurationMs;
 
-    let job: Job | null = null;
+    const job = this.db.query(`
+      UPDATE jobs
+      SET status = 'processing', locked_until = $lockedUntil, attempts = attempts + 1, updated_at = $now
+      WHERE id = (
+        SELECT id FROM jobs
+        WHERE queue_name = $queueName
+          AND status = 'pending'
+          AND scheduled_for <= $now
+        ORDER BY scheduled_for ASC
+        LIMIT 1
+      )
+      AND status = 'pending'
+      RETURNING *;
+    `).get({
+      $queueName: queueName,
+      $now: now,
+      $lockedUntil: lockedUntil
+    }) as any;
 
-    this.db.transaction(() => {
-        const candidate = this.db.query(`
-            SELECT id FROM jobs
-            WHERE queue_name = ?
-              AND status = 'pending'
-              AND scheduled_for <= ?
-            ORDER BY scheduled_for ASC
-            LIMIT 1
-        `).get(queueName, now) as { id: number } | null;
+    if (job) {
+      return this.parseJob(job);
+    }
 
-        if (candidate) {
-            const lockedUntil = now + lockDurationMs;
-            const updated = this.db.query(`
-                UPDATE jobs
-                SET status = 'processing', locked_until = ?, attempts = attempts + 1, updated_at = ?
-                WHERE id = ? AND status = 'pending'
-                RETURNING *
-            `).get(lockedUntil, now, candidate.id) as any;
-
-            if (updated) {
-                job = this.parseJob(updated);
-            }
-        }
-    })();
-
-    return job;
+    return null;
   }
 
   completeJob(id: number) {

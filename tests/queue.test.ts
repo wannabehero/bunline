@@ -115,11 +115,11 @@ describe("Queue System", () => {
     test("should support Bun.Worker processors", async () => {
         // Updated worker code to simulate package usage as much as possible,
         // but since we are inside the repo, we point to src/index.ts.
-        // The user wants 'bunline.createWorker'
+        // The user wants 'bunline.setupThreadWorker'
         const workerCode = `
             import bunline from "${process.cwd()}/src/index.ts";
 
-            bunline.createWorker(async (job) => {
+            bunline.setupThreadWorker(async (job) => {
                 // console.log("Worker processing:", job.data);
                 if (job.data.fail) throw new Error("Worker failed");
                 await new Promise(r => setTimeout(r, 50));

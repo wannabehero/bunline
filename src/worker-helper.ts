@@ -2,7 +2,7 @@ import { Job } from "./storage";
 
 declare var self: Worker;
 
-export function setupWorker(handler: (job: Job) => Promise<void> | void) {
+export function setupThreadWorker(handler: (job: Job) => Promise<void> | void) {
     // Bun Workers use self.onmessage
     self.onmessage = async (event: MessageEvent) => {
         const job = event.data as Job;

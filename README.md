@@ -1,5 +1,7 @@
 # Bunline
 
+⚠️ **Experimental Project**: This library is currently experimental and the API is subject to change.
+
 A lightweight, durable, and fast worker queue for Bun, backed by `bun:sqlite`.
 
 ## Features
@@ -13,7 +15,7 @@ A lightweight, durable, and fast worker queue for Bun, backed by `bun:sqlite`.
 ## Installation
 
 ```bash
-bun add bunline
+bun add github:wannabehero/bunline#v0.0.1
 ```
 
 ## Usage
@@ -51,7 +53,7 @@ For CPU-intensive tasks, you can run jobs in a separate thread using `Bun.Worker
 ```typescript
 import bunline from "bunline"; // Import default
 
-bunline.createWorker(async (job) => {
+bunline.setupThreadWorker(async (job) => {
   console.log("Heavy processing:", job.data);
   // Do heavy work...
 });
@@ -95,7 +97,7 @@ Returns a `Queue` instance.
 
 - `handler`: Either an `async function(job)` OR a `string` (path to worker file).
 
-### `bunline.createWorker(handler)`
+### `bunline.setupThreadWorker(handler)`
 
 Used inside a worker file to define the job processor.
 

@@ -1,4 +1,4 @@
-import { Queue } from "../src";
+import { Queue } from "bunline";
 
 const queue = new Queue("image-queue", {
     dbPath: "examples.sqlite",

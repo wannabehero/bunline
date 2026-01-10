@@ -1,6 +1,6 @@
-import { Database, Statement } from "bun:sqlite";
+import { Database, type Statement } from "bun:sqlite";
 
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type JobStatus = "pending" | "processing" | "completed" | "failed";
 
 export interface RawJobRow {
   id: number;
@@ -9,7 +9,7 @@ export interface RawJobRow {
   status: JobStatus;
   attempts: number;
   max_retries: number;
-  backoff_type: 'fixed' | 'exponential';
+  backoff_type: "fixed" | "exponential";
   backoff_delay: number; // in ms
   created_at: number;
   updated_at: number;
@@ -25,7 +25,7 @@ export interface Job<T = unknown> {
   status: JobStatus;
   attempts: number;
   max_retries: number;
-  backoff_type: 'fixed' | 'exponential';
+  backoff_type: "fixed" | "exponential";
   backoff_delay: number; // in ms
   created_at: number;
   updated_at: number;
@@ -56,9 +56,9 @@ export class Storage {
   }
 
   private init() {
-    this.db.run('PRAGMA journal_mode = WAL;');
-    this.db.run('PRAGMA synchronous = FULL;');
-    this.db.run('PRAGMA busy_timeout = 5000;');
+    this.db.run("PRAGMA journal_mode = WAL;");
+    this.db.run("PRAGMA synchronous = FULL;");
+    this.db.run("PRAGMA busy_timeout = 5000;");
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS jobs (
@@ -141,7 +141,7 @@ export class Storage {
           AND status = 'processing'
           AND locked_until < $now
           AND attempts > max_retries
-      `)
+      `),
     };
   }
 
@@ -150,10 +150,10 @@ export class Storage {
     data: T,
     options: {
       maxRetries?: number;
-      backoffType?: 'fixed' | 'exponential';
+      backoffType?: "fixed" | "exponential";
       backoffDelay?: number;
       delay?: number;
-    } = {}
+    } = {},
   ): Job<T> {
     const now = Date.now();
     const scheduledFor = now + (options.delay || 0);
@@ -162,10 +162,10 @@ export class Storage {
       $queueName: queueName,
       $data: JSON.stringify(data),
       $maxRetries: options.maxRetries ?? 0,
-      $backoffType: options.backoffType ?? 'fixed',
+      $backoffType: options.backoffType ?? "fixed",
       $backoffDelay: options.backoffDelay ?? 1000,
       $now: now,
-      $scheduledFor: scheduledFor
+      $scheduledFor: scheduledFor,
     }) as RawJobRow;
 
     return this.parseJob<T>(result);
@@ -174,14 +174,17 @@ export class Storage {
   /**
    * Atomically claims the next available job for a specific queue.
    */
-  getNextJob<T = unknown>(queueName: string, lockDurationMs: number = 30000): Job<T> | null {
+  getNextJob<T = unknown>(
+    queueName: string,
+    lockDurationMs: number = 30000,
+  ): Job<T> | null {
     const now = Date.now();
     const lockedUntil = now + lockDurationMs;
 
     const job = this.statements.getNextJob.get({
       $queueName: queueName,
       $now: now,
-      $lockedUntil: lockedUntil
+      $lockedUntil: lockedUntil,
     }) as RawJobRow | undefined;
 
     if (job) {
@@ -199,7 +202,9 @@ export class Storage {
     const now = Date.now();
 
     // We need to check if we should retry
-    const job = this.statements.getJobById.get({ $id: id }) as RawJobRow | undefined;
+    const job = this.statements.getJobById.get({ $id: id }) as
+      | RawJobRow
+      | undefined;
     if (!job) return; // Should not happen
 
     const currentJob = this.parseJob(job);
@@ -207,8 +212,8 @@ export class Storage {
     if (currentJob.attempts <= currentJob.max_retries) {
       // Retry
       let delay = currentJob.backoff_delay;
-      if (currentJob.backoff_type === 'exponential') {
-        delay = delay * Math.pow(2, currentJob.attempts - 1);
+      if (currentJob.backoff_type === "exponential") {
+        delay = delay * 2 ** (currentJob.attempts - 1);
       }
       const nextSchedule = now + delay;
 
@@ -216,14 +221,14 @@ export class Storage {
         $now: now,
         $scheduledFor: nextSchedule,
         $error: error,
-        $id: id
+        $id: id,
       });
     } else {
       // Fail permanently
       this.statements.failJobPermanently.run({
         $now: now,
         $error: error,
-        $id: id
+        $id: id,
       });
     }
   }
@@ -232,7 +237,10 @@ export class Storage {
     const now = Date.now();
 
     // 1. Recover jobs that can still be retried
-    this.statements.recoverRetryableJobs.run({ $now: now, $queueName: queueName });
+    this.statements.recoverRetryableJobs.run({
+      $now: now,
+      $queueName: queueName,
+    });
 
     // 2. Fail jobs that have exceeded max retries
     this.statements.recoverFailedJobs.run({ $now: now, $queueName: queueName });
@@ -256,7 +264,7 @@ export class Storage {
     const { data: _rawData, ...rest } = row;
     return {
       ...rest,
-      data
+      data,
     };
   }
 }

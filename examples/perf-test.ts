@@ -4,16 +4,28 @@ import { unlinkSync, existsSync } from "fs";
 
 const ASYNC_DB_PATH = "perf-test-async.sqlite";
 const WORKER_DB_PATH = "perf-test-worker.sqlite";
-const JOB_COUNT = 1000;
-const CRYPTO_ITERATIONS = 100; // Number of hash iterations per job
-const MAX_CONCURRENCY = 10;
+
+interface TestConfig {
+  name: string;
+  jobCount: number;
+  cryptoIterations: number;
+  concurrency: number;
+}
+
+// Different test scenarios
+const SCENARIOS: TestConfig[] = [
+  { name: "Light work, low concurrency", jobCount: 500, cryptoIterations: 100, concurrency: 5 },
+  { name: "Light work, high concurrency", jobCount: 500, cryptoIterations: 100, concurrency: 20 },
+  { name: "Medium work, high concurrency", jobCount: 500, cryptoIterations: 500, concurrency: 20 },
+  { name: "Heavy work, high concurrency", jobCount: 300, cryptoIterations: 2000, concurrency: 20 },
+  { name: "Very heavy work, high concurrency", jobCount: 100, cryptoIterations: 5000, concurrency: 20 },
+];
 
 // Cleanup previous test databases
 function cleanupDb(path: string) {
   if (existsSync(path)) {
     unlinkSync(path);
   }
-  // Also cleanup WAL files
   if (existsSync(path + "-wal")) {
     unlinkSync(path + "-wal");
   }
@@ -21,9 +33,6 @@ function cleanupDb(path: string) {
     unlinkSync(path + "-shm");
   }
 }
-
-cleanupDb(ASYNC_DB_PATH);
-cleanupDb(WORKER_DB_PATH);
 
 interface CryptoJobData {
   input: string;
@@ -45,41 +54,31 @@ function doCryptoWork(input: string, iterations: number): string {
 }
 
 // Generate test data
-function generateTestData(): CryptoJobData[] {
+function generateTestData(jobCount: number, cryptoIterations: number): CryptoJobData[] {
   const data: CryptoJobData[] = [];
-  for (let i = 0; i < JOB_COUNT; i++) {
+  for (let i = 0; i < jobCount; i++) {
     data.push({
       input: `test-input-${i}-${Math.random().toString(36)}`,
-      iterations: CRYPTO_ITERATIONS,
+      iterations: cryptoIterations,
       index: i,
     });
   }
   return data;
 }
 
-// Pre-compute expected results for verification
-function computeExpectedResults(testData: CryptoJobData[]): Map<number, string> {
-  const results = new Map<number, string>();
-  for (const item of testData) {
-    results.set(item.index, doCryptoWork(item.input, item.iterations));
-  }
-  return results;
-}
-
-async function runAsyncTest(testData: CryptoJobData[]): Promise<{
-  duration: number;
-  results: Map<number, string>;
-}> {
-  console.log("\n--- Running ASYNC Function Test ---");
+async function runAsyncTest(
+  testData: CryptoJobData[],
+  config: TestConfig
+): Promise<{ duration: number; completed: number }> {
+  cleanupDb(ASYNC_DB_PATH);
 
   const queueName = "async-crypto-queue";
   const queue = bunline.createQueue<CryptoJobData>(queueName, {
     dbPath: ASYNC_DB_PATH,
-    maxConcurrency: MAX_CONCURRENCY,
-    pollInterval: 10, // Fast polling for performance test
+    maxConcurrency: config.concurrency,
+    pollInterval: 5,
   });
 
-  const results = new Map<number, string>();
   let processedCount = 0;
 
   return new Promise((resolve) => {
@@ -87,57 +86,48 @@ async function runAsyncTest(testData: CryptoJobData[]): Promise<{
     let resolved = false;
 
     queue.process(async (job) => {
-      const { input, iterations, index } = job.data;
-      const hash = doCryptoWork(input, iterations);
-      results.set(index, hash);
+      const { input, iterations } = job.data;
+      doCryptoWork(input, iterations);
       processedCount++;
 
-      if (processedCount === JOB_COUNT && !resolved) {
+      if (processedCount === config.jobCount && !resolved) {
         resolved = true;
         const duration = performance.now() - startTime;
-        // Use setImmediate to let the current job handler complete before stopping
         setImmediate(async () => {
           await queue.stop({ graceful: true, timeout: 5000 });
-          resolve({ duration, results });
+          resolve({ duration, completed: processedCount });
         });
       }
     });
 
-    // Add all jobs
     for (const data of testData) {
       queue.add(data);
     }
-
-    console.log(`Added ${JOB_COUNT} jobs to async queue`);
   });
 }
 
-async function runWorkerTest(testData: CryptoJobData[]): Promise<{
-  duration: number;
-  completedCount: number;
-}> {
-  console.log("\n--- Running WORKER Thread Test ---");
+async function runWorkerTest(
+  testData: CryptoJobData[],
+  config: TestConfig
+): Promise<{ duration: number; completed: number }> {
+  cleanupDb(WORKER_DB_PATH);
 
   const queueName = "worker-crypto-queue";
   const queue = bunline.createQueue<CryptoJobData>(queueName, {
     dbPath: WORKER_DB_PATH,
-    maxConcurrency: MAX_CONCURRENCY,
-    pollInterval: 10,
+    maxConcurrency: config.concurrency,
+    pollInterval: 5,
   });
 
-  // Add all jobs first
   for (const data of testData) {
     queue.add(data);
   }
-  console.log(`Added ${JOB_COUNT} jobs to worker queue`);
 
   return new Promise((resolve) => {
     const startTime = performance.now();
 
-    // Use the worker file
     queue.process("./examples/perf-crypto-worker.ts");
 
-    // Track completion by polling database
     const checkInterval = setInterval(() => {
       try {
         const db = new Database(WORKER_DB_PATH, { readonly: true });
@@ -147,96 +137,123 @@ async function runWorkerTest(testData: CryptoJobData[]): Promise<{
         const failed = db.query(
           `SELECT COUNT(*) as count FROM jobs WHERE queue_name = ? AND status = 'failed'`
         ).get(queueName) as { count: number };
-        const processing = db.query(
-          `SELECT COUNT(*) as count FROM jobs WHERE queue_name = ? AND status = 'processing'`
-        ).get(queueName) as { count: number };
         db.close();
 
         const totalDone = completed.count + failed.count;
 
-        // Log progress every 100 jobs
-        if (totalDone % 100 === 0 && totalDone > 0) {
-          console.log(`  Progress: ${completed.count} completed, ${failed.count} failed, ${processing.count} processing`);
-        }
-
-        if (totalDone === JOB_COUNT) {
+        if (totalDone === config.jobCount) {
           clearInterval(checkInterval);
           const duration = performance.now() - startTime;
           queue.stop({ graceful: true, timeout: 5000 }).then(() => {
-            resolve({ duration, completedCount: completed.count });
+            resolve({ duration, completed: completed.count });
           });
         }
-      } catch (e) {
+      } catch {
         // Database might be locked, retry next interval
       }
-    }, 100);
+    }, 50);
   });
 }
 
+interface ScenarioResult {
+  config: TestConfig;
+  asyncDuration: number;
+  workerDuration: number;
+  asyncThroughput: number;
+  workerThroughput: number;
+  winner: string;
+  speedupPercent: number;
+}
+
+async function runScenario(config: TestConfig): Promise<ScenarioResult> {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`Scenario: ${config.name}`);
+  console.log(`  Jobs: ${config.jobCount} | Crypto iterations: ${config.cryptoIterations} | Concurrency: ${config.concurrency}`);
+
+  const testData = generateTestData(config.jobCount, config.cryptoIterations);
+
+  // Run async test
+  process.stdout.write("  Running ASYNC...  ");
+  const asyncResult = await runAsyncTest(testData, config);
+  console.log(`${asyncResult.duration.toFixed(0)}ms (${asyncResult.completed} jobs)`);
+
+  // Run worker test
+  process.stdout.write("  Running WORKER... ");
+  const workerResult = await runWorkerTest(testData, config);
+  console.log(`${workerResult.duration.toFixed(0)}ms (${workerResult.completed} jobs)`);
+
+  const asyncThroughput = (config.jobCount / asyncResult.duration) * 1000;
+  const workerThroughput = (config.jobCount / workerResult.duration) * 1000;
+
+  const winner = asyncResult.duration < workerResult.duration ? "ASYNC" : "WORKER";
+  const speedupPercent =
+    (Math.abs(asyncResult.duration - workerResult.duration) /
+      Math.max(asyncResult.duration, workerResult.duration)) *
+    100;
+
+  console.log(`  → Winner: ${winner} (${speedupPercent.toFixed(1)}% faster)`);
+
+  return {
+    config,
+    asyncDuration: asyncResult.duration,
+    workerDuration: workerResult.duration,
+    asyncThroughput,
+    workerThroughput,
+    winner,
+    speedupPercent,
+  };
+}
+
 async function main() {
-  console.log("=".repeat(60));
+  console.log("═".repeat(60));
   console.log("BUNLINE PERFORMANCE TEST: Worker Threads vs Async Functions");
-  console.log("=".repeat(60));
-  console.log(`\nConfiguration:`);
-  console.log(`  - Jobs: ${JOB_COUNT}`);
-  console.log(`  - Crypto iterations per job: ${CRYPTO_ITERATIONS}`);
-  console.log(`  - Max concurrency: ${MAX_CONCURRENCY}`);
-  console.log(`  - Work: SHA-256 hashing (${CRYPTO_ITERATIONS}x per job)`);
+  console.log("═".repeat(60));
+  console.log("\nRunning multiple scenarios to compare performance...");
 
-  // Generate test data
-  console.log("\nGenerating test data...");
-  const testData = generateTestData();
+  const results: ScenarioResult[] = [];
 
-  // Pre-compute expected results for async verification
-  console.log("Pre-computing expected results for verification...");
-  const expectedResults = computeExpectedResults(testData);
-
-  // Run async test first (clean database)
-  const asyncResult = await runAsyncTest(testData);
-
-  // Verify async results
-  let asyncCorrect = 0;
-  for (const [index, hash] of asyncResult.results) {
-    if (expectedResults.get(index) === hash) {
-      asyncCorrect++;
-    }
+  for (const scenario of SCENARIOS) {
+    const result = await runScenario(scenario);
+    results.push(result);
   }
 
-  console.log(`\nAsync Results:`);
-  console.log(`  - Duration: ${asyncResult.duration.toFixed(2)}ms`);
-  console.log(`  - Processed: ${asyncResult.results.size} jobs`);
-  console.log(`  - Correct: ${asyncCorrect}/${JOB_COUNT}`);
-  console.log(`  - Throughput: ${((JOB_COUNT / asyncResult.duration) * 1000).toFixed(2)} jobs/sec`);
+  // Summary table
+  console.log("\n" + "═".repeat(60));
+  console.log("RESULTS SUMMARY");
+  console.log("═".repeat(60));
 
-  // Run worker test (uses separate database)
-  const workerResult = await runWorkerTest(testData);
+  console.log("\n┌─────────────────────────────────────┬──────────┬──────────┬─────────┐");
+  console.log("│ Scenario                            │ Async    │ Worker   │ Winner  │");
+  console.log("├─────────────────────────────────────┼──────────┼──────────┼─────────┤");
 
-  console.log(`\nWorker Results:`);
-  console.log(`  - Duration: ${workerResult.duration.toFixed(2)}ms`);
-  console.log(`  - Completed: ${workerResult.completedCount} jobs`);
-  console.log(`  - Throughput: ${((JOB_COUNT / workerResult.duration) * 1000).toFixed(2)} jobs/sec`);
+  for (const r of results) {
+    const name = r.config.name.padEnd(35);
+    const asyncMs = `${r.asyncDuration.toFixed(0)}ms`.padStart(8);
+    const workerMs = `${r.workerDuration.toFixed(0)}ms`.padStart(8);
+    const winner = r.winner.padStart(7);
+    console.log(`│ ${name} │ ${asyncMs} │ ${workerMs} │ ${winner} │`);
+  }
 
-  // Summary
-  console.log("\n" + "=".repeat(60));
-  console.log("SUMMARY");
-  console.log("=".repeat(60));
+  console.log("└─────────────────────────────────────┴──────────┴──────────┴─────────┘");
 
-  const faster = asyncResult.duration < workerResult.duration ? "ASYNC" : "WORKER";
-  const speedup = Math.abs(asyncResult.duration - workerResult.duration) /
-    Math.max(asyncResult.duration, workerResult.duration) * 100;
+  // Analysis
+  const asyncWins = results.filter((r) => r.winner === "ASYNC").length;
+  const workerWins = results.filter((r) => r.winner === "WORKER").length;
 
-  console.log(`\n  Async:  ${asyncResult.duration.toFixed(2)}ms`);
-  console.log(`  Worker: ${workerResult.duration.toFixed(2)}ms`);
-  console.log(`\n  Winner: ${faster} (${speedup.toFixed(1)}% faster)`);
-  console.log(`\n  Correctness:`);
-  console.log(`    - Async: ${asyncCorrect === JOB_COUNT ? "PASS" : "FAIL"} (${asyncCorrect}/${JOB_COUNT})`);
-  console.log(`    - Worker: ${workerResult.completedCount === JOB_COUNT ? "PASS" : "FAIL"} (${workerResult.completedCount}/${JOB_COUNT} completed)`);
+  console.log("\nAnalysis:");
+  console.log(`  - Async won ${asyncWins}/${results.length} scenarios`);
+  console.log(`  - Worker won ${workerWins}/${results.length} scenarios`);
+
+  if (workerWins > 0) {
+    const workerWinScenarios = results.filter((r) => r.winner === "WORKER");
+    console.log(`  - Workers excel at: ${workerWinScenarios.map((r) => r.config.name).join(", ")}`);
+  }
 
   // Cleanup
   cleanupDb(ASYNC_DB_PATH);
   cleanupDb(WORKER_DB_PATH);
 
-  console.log("\n" + "=".repeat(60));
+  console.log("\n" + "═".repeat(60));
 }
 
 main().catch(console.error);

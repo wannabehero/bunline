@@ -198,14 +198,14 @@ export class Storage {
     this.statements.completeJob.run({ $now: Date.now(), $id: id });
   }
 
-  failJob(id: number, error: string) {
+  failJob(id: number, error: string): { retried: boolean; nextSchedule?: number } {
     const now = Date.now();
 
     // We need to check if we should retry
     const job = this.statements.getJobById.get({ $id: id }) as
       | RawJobRow
       | undefined;
-    if (!job) return; // Should not happen
+    if (!job) return { retried: false }; // Should not happen
 
     const currentJob = this.parseJob(job);
 
@@ -223,6 +223,8 @@ export class Storage {
         $error: error,
         $id: id,
       });
+
+      return { retried: true, nextSchedule };
     } else {
       // Fail permanently
       this.statements.failJobPermanently.run({
@@ -230,6 +232,8 @@ export class Storage {
         $error: error,
         $id: id,
       });
+
+      return { retried: false };
     }
   }
 

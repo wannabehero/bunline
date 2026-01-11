@@ -15,7 +15,7 @@ A lightweight, durable, and fast worker queue for Bun, backed by `bun:sqlite`.
 ## Installation
 
 ```bash
-bun add github:wannabehero/bunline#v0.0.1
+bun add github:wannabehero/bunline#v0.0.2
 ```
 
 ## Usage

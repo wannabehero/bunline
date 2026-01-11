@@ -1,6 +1,6 @@
 {
   "name": "bunline",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A lightweight, durable, and fast worker queue for Bun, backed by bun:sqlite.",
   "module": "src/index.ts",
   "type": "module",

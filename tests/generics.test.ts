@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { unlinkSync } from "node:fs";
 import { Queue } from "../src/queue";
 
+const DB_PATH = "generics.sqlite";
+
 describe("Generics and Type Safety", () => {
-  const dbPath = ":memory:";
+  try {
+    unlinkSync(DB_PATH);
+  } catch {}
 
   test("should handle generic job data types", async () => {
     interface EmailJob {
@@ -10,7 +15,7 @@ describe("Generics and Type Safety", () => {
       subject: string;
     }
 
-    const queue = new Queue<EmailJob>("email-queue", { dbPath });
+    const queue = new Queue<EmailJob>("email-queue", { dbPath: DB_PATH });
 
     // Type checking would happen here in TypeScript
     const job = await queue.add({
@@ -25,7 +30,7 @@ describe("Generics and Type Safety", () => {
   });
 
   test("should handle basic types as job data", async () => {
-    const queue = new Queue<string>("string-queue", { dbPath });
+    const queue = new Queue<string>("string-queue", { dbPath: DB_PATH });
     const job = await queue.add("some string data");
 
     expect(job.data).toBe("some string data");
@@ -44,7 +49,7 @@ describe("Generics and Type Safety", () => {
       tags: string[];
     }
 
-    const queue = new Queue<ComplexJob>("complex-queue", { dbPath });
+    const queue = new Queue<ComplexJob>("complex-queue", { dbPath: DB_PATH });
     const data: ComplexJob = {
       user: {
         id: 123,
@@ -62,4 +67,12 @@ describe("Generics and Type Safety", () => {
 
     await queue.stop();
   });
+
+  try {
+    unlinkSync(DB_PATH);
+  } catch {}
+  try {
+    unlinkSync(`${DB_PATH}-wal`);
+    unlinkSync(`${DB_PATH}-shm`);
+  } catch {}
 });

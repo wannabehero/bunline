@@ -1,5 +1,5 @@
-import { type Job, Storage } from "./storage";
-import { WorkerPool } from "./worker-pool";
+import { EventEmitter } from "node:events";
+import type { Job } from "./storage";
 
 export type ProcessorHandler<T = unknown> =
   | ((job: Job<T>) => Promise<void>)
@@ -24,31 +24,114 @@ export interface AddOptions {
   delay?: number;
 }
 
-export class Queue<T = unknown> {
-  private storage: Storage; // Made public for testing
-  private queueName: string;
-  private pollInterval: number;
-  private maxConcurrency: number;
-  private lockDuration: number;
-  private isRunning: boolean = false;
-  private activeJobs: number = 0;
+export class Queue<T = unknown> extends EventEmitter {
+  private worker: Worker;
   private processor: ProcessorHandler<T> | null = null;
-  private timer: Timer | null = null;
-  private workerPool: WorkerPool | null = null;
+  private pendingRequests: Map<
+    string,
+    { resolve: (value: any) => void; reject: (err: any) => void }
+  > = new Map();
+  private isStopped = false;
 
   constructor(queueName: string, options: QueueOptions = {}) {
-    this.queueName = queueName;
-    this.storage = new Storage(options.dbPath || "queue.sqlite");
-    this.pollInterval = options.pollInterval || 200;
-    this.maxConcurrency = options.maxConcurrency || 5;
-    this.lockDuration = options.lockDuration || 30000;
+    super();
+    // Use a relative URL to load the worker file.
+    // In a published package, this relies on the file being present alongside this one.
+    this.worker = new Worker(new URL("./queue-worker.ts", import.meta.url));
+
+    this.worker.onmessage = (event) => this.handleMessage(event);
+    this.worker.onerror = (err) => {
+      console.error("Queue worker error:", err);
+    };
+
+    this.worker.postMessage({
+      type: "init",
+      queueName,
+      options,
+    });
+  }
+
+  private handleMessage(event: MessageEvent) {
+    const msg = event.data;
+
+    switch (msg.type) {
+      case "add-response": {
+        const req = this.pendingRequests.get(msg.requestId);
+        if (req) {
+          if (msg.success) {
+            req.resolve(msg.job);
+          } else {
+            req.reject(new Error(msg.error));
+          }
+          this.pendingRequests.delete(msg.requestId);
+        }
+        break;
+      }
+      case "exec-job":
+        this.handleExecJob(msg.job);
+        break;
+      case "job-completed":
+        this.emit("completed", { id: msg.jobId });
+        break;
+      case "job-failed":
+        this.emit("failed", { id: msg.jobId, error: msg.error });
+        break;
+      case "stopped":
+        this.isStopped = true;
+        this.worker.terminate();
+        break;
+    }
+  }
+
+  private async handleExecJob(job: Job<T>) {
+    if (typeof this.processor !== "function") {
+      // Should not happen if logic is correct
+      this.worker.postMessage({
+        type: "job-result",
+        jobId: job.id,
+        success: false,
+        resultOrError: "Processor is not a function",
+      });
+      return;
+    }
+
+    try {
+      await this.processor(job);
+      this.worker.postMessage({
+        type: "job-result",
+        jobId: job.id,
+        success: true,
+      });
+    } catch (err: unknown) {
+      let errorMessage = "Unknown error";
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === "string") {
+        errorMessage = err;
+      }
+      this.worker.postMessage({
+        type: "job-result",
+        jobId: job.id,
+        success: false,
+        resultOrError: errorMessage,
+      });
+    }
   }
 
   /**
    * Add a job to the queue
    */
-  add(data: T, options: AddOptions = {}): Job<T> {
-    return this.storage.addJob<T>(this.queueName, data, options);
+  add(data: T, options: AddOptions = {}): Promise<Job<T>> {
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(requestId, { resolve, reject });
+      this.worker.postMessage({
+        type: "add",
+        data,
+        options,
+        requestId,
+      });
+    });
   }
 
   /**
@@ -60,23 +143,21 @@ export class Queue<T = unknown> {
     }
     this.processor = handler;
 
-    if (typeof handler === "string") {
-      // Initialize worker pool
-      this.workerPool = new WorkerPool(handler, {
-        size: this.maxConcurrency,
-      });
-    }
+    const handlerType = typeof handler === "string" ? "string" : "function";
+    const handlerValue = typeof handler === "string" ? handler : undefined;
 
-    this.start();
+    this.worker.postMessage({
+      type: "process",
+      handlerType,
+      handlerValue,
+    });
   }
 
   /**
    * Start the polling loop
    */
   start() {
-    if (this.isRunning) return;
-    this.isRunning = true;
-    this.loop();
+    this.worker.postMessage({ type: "start" });
   }
 
   /**
@@ -85,100 +166,25 @@ export class Queue<T = unknown> {
    * @param options.timeout - Max ms to wait for active jobs (default: 30000)
    */
   async stop(options: StopOptions = {}) {
-    const { graceful = true, timeout = 30000 } = options;
+    if (this.isStopped) return;
 
-    this.isRunning = false;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    return new Promise<void>((resolve) => {
+      // We listen for the "stopped" message or termination
+      // But actually, the worker sends "stopped" and then we terminate.
+      // So we can just resolve when we get the stopped message?
+      // The current handleMessage terminates the worker on 'stopped'.
+      // We need to hook into that.
 
-    if (graceful && this.activeJobs > 0) {
-      const startTime = Date.now();
-      while (this.activeJobs > 0 && Date.now() - startTime < timeout) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-
-      if (this.activeJobs > 0) {
-        console.warn(
-          `Force stopping with ${this.activeJobs} jobs still active after ${timeout}ms timeout`,
-        );
-      }
-    }
-
-    if (this.workerPool) {
-      await this.workerPool.terminate();
-    }
-    this.storage.close();
-  }
-
-  private loop() {
-    if (!this.isRunning) return;
-
-    try {
-      this.storage.recoverStuckJobs(this.queueName);
-    } catch (e) {
-      console.error("Error recovering stuck jobs:", e);
-    }
-
-    if (this.activeJobs >= this.maxConcurrency) {
-      this.scheduleNext(this.pollInterval);
-      return;
-    }
-
-    try {
-      const job = this.storage.getNextJob<T>(this.queueName, this.lockDuration);
-
-      if (job) {
-        this.activeJobs++;
-        this.handleJob(job).finally(() => {
-          this.activeJobs--;
-          if (this.isRunning) {
-            // Trigger immediate loop to process next job faster
-            setImmediate(() => this.loop());
-          }
-        });
-
-        if (this.activeJobs < this.maxConcurrency) {
-          setImmediate(() => this.loop());
+      const checkStopped = () => {
+        if (this.isStopped) {
+          resolve();
+        } else {
+          setTimeout(checkStopped, 50);
         }
-        return;
-      } else {
-        this.scheduleNext(this.pollInterval);
-      }
-    } catch (err) {
-      console.error("Error in queue loop:", err);
-      this.scheduleNext(this.pollInterval);
-    }
-  }
+      };
 
-  private scheduleNext(ms: number) {
-    if (!this.isRunning) return;
-    this.timer = setTimeout(() => this.loop(), ms);
-  }
-
-  private async handleJob(job: Job<T>) {
-    try {
-      if (!this.processor) {
-        throw new Error("No processor registered");
-      }
-
-      if (typeof this.processor === "function") {
-        await this.processor(job);
-      } else if (this.workerPool) {
-        await this.workerPool.run(job as Job<unknown>); // Worker pool deals with unknown/any, serialization handles types
-      }
-
-      this.storage.completeJob(job.id);
-    } catch (err: unknown) {
-      console.error(`Job ${job.id} failed:`, err);
-      let errorMessage = "Unknown error";
-      if (err instanceof Error) {
-        errorMessage = err.message;
-      } else if (typeof err === "string") {
-        errorMessage = err;
-      }
-      this.storage.failJob(job.id, errorMessage);
-    }
+      this.worker.postMessage({ type: "stop", options });
+      checkStopped();
+    });
   }
 }

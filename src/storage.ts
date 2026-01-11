@@ -78,12 +78,13 @@ export class Storage {
       );
     `);
 
+    // Create new optimal indexes
     this.db.run(`
-      CREATE INDEX IF NOT EXISTS idx_jobs_status_scheduled ON jobs(status, scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_jobs_queue_status_scheduled ON jobs(queue_name, status, scheduled_for);
     `);
 
     this.db.run(`
-       CREATE INDEX IF NOT EXISTS idx_jobs_queue_status ON jobs(queue_name, status);
+      CREATE INDEX IF NOT EXISTS idx_jobs_queue_status_locked ON jobs(queue_name, status, locked_until);
     `);
   }
 

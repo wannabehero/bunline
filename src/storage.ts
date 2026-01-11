@@ -141,6 +141,7 @@ export class Storage {
           AND status = 'processing'
           AND locked_until < $now
           AND attempts > max_retries
+        RETURNING id, last_error
       `),
     };
   }
@@ -233,7 +234,7 @@ export class Storage {
     }
   }
 
-  recoverStuckJobs(queueName: string) {
+  recoverStuckJobs(queueName: string): { id: number; last_error: string }[] {
     const now = Date.now();
 
     // 1. Recover jobs that can still be retried
@@ -243,7 +244,12 @@ export class Storage {
     });
 
     // 2. Fail jobs that have exceeded max retries
-    this.statements.recoverFailedJobs.run({ $now: now, $queueName: queueName });
+    const failed = this.statements.recoverFailedJobs.all({
+      $now: now,
+      $queueName: queueName,
+    }) as { id: number; last_error: string }[];
+
+    return failed;
   }
 
   close() {

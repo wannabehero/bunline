@@ -1,5 +1,14 @@
+import { EventEmitter } from "node:events";
 import { type Job, Storage } from "./storage";
 import { WorkerPool } from "./worker-pool";
+
+export interface QueueEvents<T> {
+  "job:added": (job: Job<T>) => void;
+  "job:started": (job: Job<T>) => void;
+  "job:completed": (job: Job<T>) => void;
+  "job:failed": (job: Job<T>, error: Error, willRetry: boolean) => void;
+  "job:exhausted": (job: Job<T>, error: Error) => void;
+}
 
 export type ProcessorHandler<T = unknown> =
   | ((job: Job<T>) => Promise<void>)
@@ -24,7 +33,7 @@ export interface AddOptions {
   delay?: number;
 }
 
-export class Queue<T = unknown> {
+export class Queue<T = unknown> extends EventEmitter {
   private storage: Storage; // Made public for testing
   private queueName: string;
   private pollInterval: number;
@@ -37,6 +46,7 @@ export class Queue<T = unknown> {
   private workerPool: WorkerPool | null = null;
 
   constructor(queueName: string, options: QueueOptions = {}) {
+    super();
     this.queueName = queueName;
     this.storage = new Storage(options.dbPath || "queue.sqlite");
     this.pollInterval = options.pollInterval || 200;
@@ -48,7 +58,9 @@ export class Queue<T = unknown> {
    * Add a job to the queue
    */
   add(data: T, options: AddOptions = {}): Job<T> {
-    return this.storage.addJob<T>(this.queueName, data, options);
+    const job = this.storage.addJob<T>(this.queueName, data, options);
+    this.emit("job:added", job);
+    return job;
   }
 
   /**
@@ -163,6 +175,8 @@ export class Queue<T = unknown> {
         throw new Error("No processor registered");
       }
 
+      this.emit("job:started", job);
+
       if (typeof this.processor === "function") {
         await this.processor(job);
       } else if (this.workerPool) {
@@ -170,15 +184,21 @@ export class Queue<T = unknown> {
       }
 
       this.storage.completeJob(job.id);
+      this.emit("job:completed", job);
     } catch (err: unknown) {
       console.error(`Job ${job.id} failed:`, err);
       let errorMessage = "Unknown error";
+      const errorObj = err instanceof Error ? err : new Error(String(err));
       if (err instanceof Error) {
         errorMessage = err.message;
       } else if (typeof err === "string") {
         errorMessage = err;
       }
-      this.storage.failJob(job.id, errorMessage);
+      const { retried } = this.storage.failJob(job.id, errorMessage);
+      this.emit("job:failed", job, errorObj, retried);
+      if (!retried) {
+        this.emit("job:exhausted", job, errorObj);
+      }
     }
   }
 }

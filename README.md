@@ -41,6 +41,11 @@ queue.process(async (job) => {
   // If you throw, the job will be retried
 });
 
+// Listen to events
+queue.on("job:added", (job) => console.log(`Job ${job.id} added`));
+queue.on("job:completed", (job) => console.log(`Job ${job.id} completed`));
+queue.on("job:failed", (job, err) => console.log(`Job ${job.id} failed: ${err.message}`));
+
 // Add jobs
 await queue.add({ email: "user@example.com" }, {
   maxRetries: 3,
@@ -108,6 +113,16 @@ Returns a `Queue<T>` instance.
 ### `queue.process(handler)`
 
 - `handler`: Either an `async function(job: Job<T>)` OR a `string` (path to worker file).
+
+### Events
+
+The queue emits the following events:
+
+- `job:added`: `(job: Job<T>)`
+- `job:started`: `(job: Job<T>)`
+- `job:completed`: `(job: Job<T>)`
+- `job:failed`: `(job: Job<T>, error: Error, willRetry: boolean)`
+- `job:exhausted`: `(job: Job<T>, error: Error)`
 
 ### `bunline.setupThreadWorker<T>(handler)`
 
